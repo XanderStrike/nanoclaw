@@ -1,0 +1,10 @@
+node_modules
+dist
+store
+groups
+data
+logs
+*.db
+.env
+.git
+.claude

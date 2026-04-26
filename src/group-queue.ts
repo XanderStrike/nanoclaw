@@ -35,6 +35,9 @@ export class GroupQueue {
     null;
   private shuttingDown = false;
 
+  /** Map from group folder to the JID that currently has an active container for it. */
+  private folderOwner = new Map<string, string>();
+
   private getGroup(groupJid: string): GroupState {
     let state = this.groups.get(groupJid);
     if (!state) {
@@ -59,8 +62,25 @@ export class GroupQueue {
     this.processMessagesFn = fn;
   }
 
-  enqueueMessageCheck(groupJid: string): void {
+  enqueueMessageCheck(groupJid: string, groupFolder?: string): void {
     if (this.shuttingDown) return;
+
+    // If another JID already has an active container for this folder, just mark pending
+    if (groupFolder) {
+      const ownerJid = this.folderOwner.get(groupFolder);
+      if (ownerJid && ownerJid !== groupJid) {
+        const ownerState = this.getGroup(ownerJid);
+        if (ownerState.active && ownerState.groupFolder === groupFolder) {
+          const state = this.getGroup(groupJid);
+          state.pendingMessages = true;
+          logger.debug(
+            { groupJid, groupFolder, ownerJid },
+            'Folder already has active container, message queued',
+          );
+          return;
+        }
+      }
+    }
 
     const state = this.getGroup(groupJid);
 
@@ -138,7 +158,10 @@ export class GroupQueue {
     const state = this.getGroup(groupJid);
     state.process = proc;
     state.containerName = containerName;
-    if (groupFolder) state.groupFolder = groupFolder;
+    if (groupFolder) {
+      state.groupFolder = groupFolder;
+      this.folderOwner.set(groupFolder, groupJid);
+    }
   }
 
   /**
@@ -155,10 +178,24 @@ export class GroupQueue {
 
   /**
    * Send a follow-up message to the active container via IPC file.
+   * If the requesting JID doesn't have an active container but another JID
+   * sharing the same folder does, pipe to that container instead.
    * Returns true if the message was written, false if no active container.
    */
-  sendMessage(groupJid: string, text: string): boolean {
-    const state = this.getGroup(groupJid);
+  sendMessage(groupJid: string, text: string, groupFolder?: string): boolean {
+    // Find the JID that owns the active container for this folder
+    let targetJid = groupJid;
+    let state = this.getGroup(groupJid);
+    if ((!state.active || !state.groupFolder) && groupFolder) {
+      const folderOwnerJid = this.folderOwner.get(groupFolder);
+      if (folderOwnerJid && folderOwnerJid !== groupJid) {
+        const ownerState = this.getGroup(folderOwnerJid);
+        if (ownerState.active && ownerState.groupFolder === groupFolder) {
+          targetJid = folderOwnerJid;
+          state = ownerState;
+        }
+      }
+    }
     if (!state.active || !state.groupFolder || state.isTaskContainer)
       return false;
     state.idleWaiting = false; // Agent is about to receive work, no longer idle
@@ -183,6 +220,8 @@ export class GroupQueue {
   closeStdin(groupJid: string): void {
     const state = this.getGroup(groupJid);
     if (!state.active || !state.groupFolder) return;
+    // Only close if this JID owns the container for this folder
+    if (this.folderOwner.get(state.groupFolder) !== groupJid) return;
 
     const inputDir = path.join(DATA_DIR, 'ipc', state.groupFolder, 'input');
     try {
@@ -222,6 +261,7 @@ export class GroupQueue {
       logger.error({ groupJid, err }, 'Error processing messages for group');
       this.scheduleRetry(groupJid, state);
     } finally {
+      if (state.groupFolder) this.folderOwner.delete(state.groupFolder);
       state.active = false;
       state.process = null;
       state.containerName = null;
@@ -249,6 +289,7 @@ export class GroupQueue {
     } catch (err) {
       logger.error({ groupJid, taskId: task.id, err }, 'Error running task');
     } finally {
+      if (state.groupFolder) this.folderOwner.delete(state.groupFolder);
       state.active = false;
       state.isTaskContainer = false;
       state.runningTaskId = null;

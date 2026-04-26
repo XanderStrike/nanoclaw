@@ -1,0 +1,24 @@
+services:
+  nanoclaw:
+    build: .
+    container_name: nanoclaw
+    restart: unless-stopped
+    env_file: .env
+    environment:
+      # Override paths that were relative to host cwd — inside the container
+      # everything lives under /app. Groups/data/store are volume-mounted.
+      - ONECLI_URL=http://host.docker.internal:10254
+    volumes:
+      # Docker socket — so NanoClaw can spawn agent containers on the host daemon
+      - /var/run/docker.sock:/var/run/docker.sock
+      # Persistent state
+      - ./store:/app/store
+      - ./groups:/app/groups
+      - ./data:/app/data
+      - ./logs:/app/logs
+      # Agent container build context must be readable
+      - ./container:/app/container:ro
+      # Skills and scripts
+      - ./.claude:/app/.claude
+    extra_hosts:
+      - "host.docker.internal:host-gateway"

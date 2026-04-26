@@ -76,7 +76,7 @@ function createSchema(database: Database.Database): void {
     CREATE TABLE IF NOT EXISTS registered_groups (
       jid TEXT PRIMARY KEY,
       name TEXT NOT NULL,
-      folder TEXT NOT NULL UNIQUE,
+      folder TEXT NOT NULL,
       trigger_pattern TEXT NOT NULL,
       added_at TEXT NOT NULL,
       container_config TEXT,
@@ -156,6 +156,33 @@ function createSchema(database: Database.Database): void {
     database.exec(`ALTER TABLE messages ADD COLUMN reply_to_sender_name TEXT`);
   } catch {
     /* columns already exist */
+  }
+
+  // Drop UNIQUE constraint on folder column if it still exists (migration for existing DBs)
+  // SQLite doesn't support ALTER TABLE DROP CONSTRAINT, so we recreate the table.
+  try {
+    const hasUnique = database
+      .prepare("SELECT sql FROM sqlite_master WHERE type='table' AND name='registered_groups'")
+      .get() as { sql: string } | undefined;
+    if (hasUnique && hasUnique.sql.includes('folder TEXT NOT NULL UNIQUE')) {
+      database.exec(`
+        CREATE TABLE IF NOT EXISTS registered_groups_new (
+          jid TEXT PRIMARY KEY,
+          name TEXT NOT NULL,
+          folder TEXT NOT NULL,
+          trigger_pattern TEXT NOT NULL,
+          added_at TEXT NOT NULL,
+          container_config TEXT,
+          requires_trigger INTEGER DEFAULT 1,
+          is_main INTEGER DEFAULT 0
+        );
+        INSERT OR IGNORE INTO registered_groups_new SELECT * FROM registered_groups;
+        DROP TABLE registered_groups;
+        ALTER TABLE registered_groups_new RENAME TO registered_groups;
+      `);
+    }
+  } catch (err) {
+    logger.warn({ err }, 'Failed to migrate registered_groups folder constraint');
   }
 }
 

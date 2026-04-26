@@ -532,7 +532,7 @@ async function startMessageLoop(): Promise<void> {
             // Enqueue so processGroupMessages handles auth + cursor advancement.
             // Don't pipe via IPC — slash commands need a fresh container with
             // string prompt (not MessageStream) for SDK recognition.
-            queue.enqueueMessageCheck(chatJid);
+            queue.enqueueMessageCheck(chatJid, group.folder);
             continue;
           }
           // --- End session command interception ---
@@ -566,7 +566,7 @@ async function startMessageLoop(): Promise<void> {
             allPending.length > 0 ? allPending : groupMessages;
           const formatted = formatMessages(messagesToSend, TIMEZONE);
 
-          if (queue.sendMessage(chatJid, formatted)) {
+          if (queue.sendMessage(chatJid, formatted, group.folder)) {
             logger.debug(
               { chatJid, count: messagesToSend.length },
               'Piped messages to active container',
@@ -582,7 +582,7 @@ async function startMessageLoop(): Promise<void> {
               );
           } else {
             // No active container — enqueue for a new one
-            queue.enqueueMessageCheck(chatJid);
+            queue.enqueueMessageCheck(chatJid, group.folder);
           }
         }
       }
@@ -610,7 +610,7 @@ function recoverPendingMessages(): void {
         { group: group.name, pendingCount: pending.length },
         'Recovery: found unprocessed messages',
       );
-      queue.enqueueMessageCheck(chatJid);
+      queue.enqueueMessageCheck(chatJid, group.folder);
     }
   }
 }
